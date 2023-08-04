@@ -7,6 +7,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from coinbase.wallet.client import Client
 import configparser
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(filename='trading_bot.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -63,7 +64,8 @@ def place_sell_order(client, currency_pair, amount):
     sell = client.sell(account_id='primary', amount=amount, currency_pair=currency_pair)
     logging.info(f"Placed sell order: {sell}")
 
-def live_trading(config=None):
+def live_trading(config=None, backtest=False):
+    logging.info("Starting live trading...")
     # Retrieve values from configuration file
     coin_id = config['TRADING']['coin_id']
     local_currency = config['TRADING']['local_currency']
@@ -74,6 +76,9 @@ def live_trading(config=None):
 
     # Initialize portfolio
     portfolio = {'cash': get_account_balance(client), 'position': 0}
+
+    # Define the percentage of portfolio to trade
+    percentage_to_trade = 50
 
     # Fetch historical data from CoinGecko
     data = fetch_coingecko_data(coin_id=coin_id, local_currency=local_currency)
@@ -149,35 +154,53 @@ def live_trading(config=None):
             data_to_loop = data.iloc[int(len(data) * 0.8):] if backtest else data
             for i, row in data_to_loop.iterrows():
                 try:
-                   # Inside the loop
+                    # Get the current balance (replace with actual function to fetch balance)
+                    current_balance = get_account_balance(client)
+
+                    # Calculate the amount to buy or sell based on the percentage
+                    amount_to_trade = (current_balance * percentage_to_trade) / 100
+                    
+                    # Inside the loop
                     current_row = row[['close', 'Short_EMA', 'Long_EMA', 'RSI', 'EMA_5', 'EMA_20', 'EMA_100']].to_frame().T
                     current_features_scaled = scaler.transform(current_row)
                     current_features_df = pd.DataFrame(current_features_scaled, columns=current_row.columns)
                     prediction = knn_model.predict(current_features_df)
 
-                  # Log the current row and prediction
+                    # Log the current row and prediction
                     logging.info(f"Row {i}: Short_EMA: {row['Short_EMA']}, Long_EMA: {row['Long_EMA']}, RSI: {row['RSI']}, Prediction: {prediction}")
 
-                  # Generate signals with new EMAs
+                    # Generate signals with new EMAs
                     buy_signal = (row['Short_EMA'] > row['Long_EMA']) & (row['EMA_5'] > row['EMA_20']) & (row['RSI'] < 50) & (prediction == 1)
                     sell_signal = (row['Short_EMA'] < row['Long_EMA']) & (row['EMA_5'] < row['EMA_20']) & (row['RSI'] > 60) & (prediction == 0)
 
-                  # Log the buy and sell signals
+                    # Log the buy and sell signals
                     logging.info(f"Buy signal: {buy_signal}, Sell signal: {sell_signal}")
 
-                  # Log what's happening
+                    # Place buy or sell orders if signals are true
+                    if buy_signal:
+                        place_buy_order(client, currency_pair, amount_to_buy)
+                    if sell_signal:
+                        place_sell_order(client, currency_pair, amount_to_sell)
+
+                    # Log what's happening
                     logging.info(f"Price: {price}, Other info...")
 
-                  # Sleep for a while before the next iteration
+                   # Sleep for a while before the next iteration
                     time.sleep(60)
+
                 except Exception as e:
-                   logging.error(f"Error: {e}")
-                # Handle the error, possibly by waiting and then continuing
-                   time.sleep(300)
-                   continue
+                    logging.error(f"Error: {e}")
+                    # Handle the error, possibly by waiting and then continuing
+                    time.sleep(300)
+                    continue
 
 
-
+        except Exception as e:
+            logging.error(f"Outer loop error: {e}")
+            # Handle outer loop errors
+            time.sleep(600)
+            continue
+    
 def trading_bot(backtest=False, config=None):
     # Retrieve values from configuration file
     coin_id = config['TRADING']['coin_id']
@@ -315,7 +338,7 @@ def main():
 
         if choice == '1':
             print("Starting live trading...")
-            live_trading
+            live_trading(config)
         elif choice == '2':
             print("Running backtest...")
             trading_bot(backtest=True, config=config)
